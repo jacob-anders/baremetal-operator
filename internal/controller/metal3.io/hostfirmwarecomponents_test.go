@@ -10,6 +10,7 @@ import (
 	"github.com/metal3-io/baremetal-operator/pkg/provisioner/fixture"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -427,6 +428,122 @@ func TestStoreHostFirmwareComponents(t *testing.T) {
 			assert.Equal(t, tc.ExpectedComponents.Status.Conditions, actual.Status.Conditions)
 		})
 	}
+}
+
+// Test the spec deletion scenario - this covers two cases:
+// 1. When spec is deleted but status still has old values -> should detect change (ChangeDetected=True)
+// 2. After status is synced to empty spec by BMH controller -> should clear change (ChangeDetected=False)
+func TestHFCSpecDeletion(t *testing.T) {
+	ctx := context.TODO()
+
+	// Mock components from provisioner
+	components := []metal3api.FirmwareComponentStatus{
+		{
+			Component:          "bmc",
+			InitialVersion:     "1.0.0",
+			CurrentVersion:     "1.1.0",
+			LastVersionFlashed: "1.1.0",
+		},
+	}
+
+	t.Run("spec empty but status has old updates - should detect change", func(t *testing.T) {
+		// Create HFC resource with empty spec but status containing old updates
+		hfc := &metal3api.HostFirmwareComponents{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "HostFirmwareComponents",
+				APIVersion: "metal3.io/v1alpha1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-host",
+				Namespace:  "test-namespace",
+				Generation: 2, // Simulate spec was updated (cleared)
+			},
+			Spec: metal3api.HostFirmwareComponentsSpec{
+				Updates: []metal3api.FirmwareUpdate{}, // Empty spec - simulates deletion
+			},
+			Status: metal3api.HostFirmwareComponentsStatus{
+				Updates: []metal3api.FirmwareUpdate{
+					{
+						Component: "bmc",
+						URL:       "https://myurl/oldbmcfirmware",
+					},
+				}, // Old status updates that should trigger change detection
+				Components: components,
+				Conditions: []metav1.Condition{
+					{Type: string(metal3api.HostFirmwareComponentsChangeDetected), Status: "False", Reason: "OK"},
+					{Type: string(metal3api.HostFirmwareComponentsValid), Status: "True", Reason: "OK"},
+				},
+			},
+		}
+
+		r := getTestHFCReconciler(hfc)
+		info := rhfcInfo{
+			ctx: ctx,
+			log: logf.Log.WithName("controllers").WithName("HostFirmwareComponents"),
+			hfc: hfc,
+		}
+
+		// Run updateHostFirmware
+		err := r.updateHostFirmware(&info, components)
+		assert.NoError(t, err)
+
+		// Verify that ChangeDetected condition is set to True (there's a mismatch)
+		changeDetectedCondition := meta.FindStatusCondition(hfc.Status.Conditions, string(metal3api.HostFirmwareComponentsChangeDetected))
+		assert.NotNil(t, changeDetectedCondition)
+		assert.Equal(t, metav1.ConditionTrue, changeDetectedCondition.Status, "ChangeDetected should be True when spec and status mismatch")
+
+		// Verify that Valid condition is set to True
+		validCondition := meta.FindStatusCondition(hfc.Status.Conditions, string(metal3api.HostFirmwareComponentsValid))
+		assert.NotNil(t, validCondition)
+		assert.Equal(t, metav1.ConditionTrue, validCondition.Status, "Valid should be True when spec is empty")
+	})
+
+	t.Run("after status synced to empty spec - should clear change detection", func(t *testing.T) {
+		// Create HFC resource where both spec and status are empty (after BMH controller sync)
+		hfc := &metal3api.HostFirmwareComponents{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "HostFirmwareComponents",
+				APIVersion: "metal3.io/v1alpha1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-host",
+				Namespace:  "test-namespace",
+				Generation: 2,
+			},
+			Spec: metal3api.HostFirmwareComponentsSpec{
+				Updates: []metal3api.FirmwareUpdate{}, // Empty spec
+			},
+			Status: metal3api.HostFirmwareComponentsStatus{
+				Updates:    []metal3api.FirmwareUpdate{}, // Empty status (synced by BMH controller)
+				Components: components,
+				Conditions: []metav1.Condition{
+					{Type: string(metal3api.HostFirmwareComponentsChangeDetected), Status: "True", Reason: "OK"},
+					{Type: string(metal3api.HostFirmwareComponentsValid), Status: "True", Reason: "OK"},
+				},
+			},
+		}
+
+		r := getTestHFCReconciler(hfc)
+		info := rhfcInfo{
+			ctx: ctx,
+			log: logf.Log.WithName("controllers").WithName("HostFirmwareComponents"),
+			hfc: hfc,
+		}
+
+		// Run updateHostFirmware
+		err := r.updateHostFirmware(&info, components)
+		assert.NoError(t, err)
+
+		// Verify that ChangeDetected condition is set to False (no mismatch)
+		changeDetectedCondition := meta.FindStatusCondition(hfc.Status.Conditions, string(metal3api.HostFirmwareComponentsChangeDetected))
+		assert.NotNil(t, changeDetectedCondition)
+		assert.Equal(t, metav1.ConditionFalse, changeDetectedCondition.Status, "ChangeDetected should be False when spec and status are both empty")
+
+		// Verify that Valid condition is set to True
+		validCondition := meta.FindStatusCondition(hfc.Status.Conditions, string(metal3api.HostFirmwareComponentsValid))
+		assert.NotNil(t, validCondition)
+		assert.Equal(t, metav1.ConditionTrue, validCondition.Status, "Valid should be True when spec is empty")
+	})
 }
 
 // Test the function to validate the components in the Spec.
