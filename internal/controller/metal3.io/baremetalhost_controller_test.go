@@ -11,6 +11,7 @@ import (
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	"github.com/metal3-io/baremetal-operator/pkg/hardwareutils/bmc"
+	"github.com/metal3-io/baremetal-operator/pkg/provisioner"
 	"github.com/metal3-io/baremetal-operator/pkg/provisioner/fixture"
 	"github.com/metal3-io/baremetal-operator/pkg/secretutils"
 	promutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -3174,6 +3175,63 @@ func bmhWithStatus(operStatus metal3api.OperationalStatus, provStatus metal3api.
 		},
 	}
 }
+func TestComputeHealthyCondition(t *testing.T) {
+	testCases := []struct {
+		Scenario       string
+		Health         string
+		ExpectedStatus bool
+		ExpectedReason string
+	}{
+		{
+			Scenario:       "empty health (unknown)",
+			Health:         "",
+			ExpectedStatus: true,
+			ExpectedReason: metal3api.UnknownHealthReason,
+		},
+		{
+			Scenario:       "OK health",
+			Health:         "OK",
+			ExpectedStatus: true,
+			ExpectedReason: metal3api.HealthyReason,
+		},
+		{
+			Scenario:       "Warning health",
+			Health:         "Warning",
+			ExpectedStatus: false,
+			ExpectedReason: metal3api.WarningHealthReason,
+		},
+		{
+			Scenario:       "Critical health",
+			Health:         "Critical",
+			ExpectedStatus: false,
+			ExpectedReason: metal3api.CriticalHealthReason,
+		},
+		{
+			Scenario:       "unknown value defaults to Unknown",
+			Health:         "SomeUnexpectedValue",
+			ExpectedStatus: true,
+			ExpectedReason: metal3api.UnknownHealthReason,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.Scenario, func(t *testing.T) {
+			host := bmhWithStatus(metal3api.OperationalStatusOK, metal3api.StateAvailable)
+			fix := &fixture.Fixture{Health: tc.Health}
+			prov, _ := fix.NewProvisioner(t.Context(), provisioner.BuildHostData(*host, bmc.Credentials{}), nil)
+			computeConditions(host, prov)
+
+			cond := conditions.Get(host, metal3api.HealthyCondition)
+			require.NotNil(t, cond)
+			if tc.ExpectedStatus {
+				assert.Equal(t, metav1.ConditionTrue, cond.Status)
+			} else {
+				assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			}
+			assert.Equal(t, tc.ExpectedReason, cond.Reason)
+		})
+	}
+}
+
 func TestComputeConditions(t *testing.T) {
 	testCases := []struct {
 		Scenario      string

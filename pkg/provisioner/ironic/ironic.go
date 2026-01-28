@@ -2006,3 +2006,12 @@ func (p *ironicProvisioner) HasPowerFailure() bool {
 	}
 	return node.Fault == "power failure"
 }
+
+func (p *ironicProvisioner) GetHealth() string {
+	node, err := p.getNode()
+	if err != nil {
+		p.log.Error(err, "Ignored error while checking Health")
+		return ""
+	}
+	return node.Health
+}

@@ -232,6 +232,9 @@ type Provisioner interface {
 
 	// Check if Ironic node is experiencing a power failure
 	HasPowerFailure() bool
+
+	// GetHealth returns the health status from the Ironic node
+	GetHealth() string
 }
 
 // Result holds the response from a call in the Provsioner API.

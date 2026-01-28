@@ -2239,6 +2239,19 @@ func computeConditions(host *metal3api.BareMetalHost, prov provisioner.Provision
 	if prov != nil && prov.HasPowerFailure() {
 		setConditionFalse(host, metal3api.ManageableCondition, metal3api.PowerFailureReason)
 	}
+	// Set Healthy condition based on BMC-reported health
+	if prov != nil {
+		switch prov.GetHealth() {
+		case "OK":
+			setConditionTrue(host, metal3api.HealthyCondition, metal3api.HealthyReason)
+		case "Warning":
+			setConditionFalse(host, metal3api.HealthyCondition, metal3api.WarningHealthReason)
+		case "Critical":
+			setConditionFalse(host, metal3api.HealthyCondition, metal3api.CriticalHealthReason)
+		default: // includes ""
+			setConditionTrue(host, metal3api.HealthyCondition, metal3api.UnknownHealthReason)
+		}
+	}
 }
 
 func (r *BareMetalHostReconciler) saveHostStatus(ctx context.Context, host *metal3api.BareMetalHost) error {

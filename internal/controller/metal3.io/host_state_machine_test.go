@@ -1431,6 +1431,10 @@ func (p *mockProvisioner) HasPowerFailure() bool {
 	return false
 }
 
+func (p *mockProvisioner) GetHealth() string {
+	return ""
+}
+
 func TestUpdateBootModeStatus(t *testing.T) {
 	testCases := []struct {
 		Scenario       string
